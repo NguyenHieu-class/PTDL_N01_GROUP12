@@ -5,23 +5,16 @@ import time
 import csv
 import os
 from bs4 import BeautifulSoup
-
-
 def extract_product_info(html_content):
     """Extract product information from the page HTML using BeautifulSoup."""
     soup = BeautifulSoup(html_content, 'html.parser')
-
     # Find all product items - Lazada's product grid items have class 'Bm3ON'
     product_items = soup.select('.Bm3ON')  # Main product card container
-
     print(f"Found {len(product_items)} product items")
-
     products = []
-
     for item in product_items:
         try:
             product = {}
-
             # Extract product URL - look for all links and find the product link
             links = item.select('a')
             for link in links:
@@ -38,12 +31,10 @@ def extract_product_info(html_content):
                         else:
                             product['url'] = 'https://www.lazada.vn/' + product['url']
                     break
-
             # If we didn't find a URL in the links, try to construct it from data-item-id
             if 'url' not in product and item.has_attr('data-item-id'):
                 item_id = item['data-item-id']
                 product['url'] = f'https://www.lazada.vn/products/pdp-i{item_id}.html'
-
             # Extract product name - look for the title in the link or RfADt class
             name_element = item.select_one('.RfADt a')
             if name_element:
@@ -58,7 +49,6 @@ def extract_product_info(html_content):
                     name_element = item.select_one('.RfADt')
                     if name_element:
                         product['name'] = name_element.text.strip()
-
             # Extract price - look for the price in ooOxS class
             price_element = item.select_one('.ooOxS')
             if price_element:
@@ -68,11 +58,9 @@ def extract_product_info(html_content):
                 price_element = item.select_one('.aBrP0')
                 if price_element:
                     product['price'] = price_element.text.strip()
-
             # Extract discount if available
             discount_element = None
             discount_container = item.select_one('.WNoq3')
-
             if discount_container:
                 spans = discount_container.find_all('span')
                 for span in spans:
@@ -80,37 +68,29 @@ def extract_product_info(html_content):
                     if 'Voucher giảm' in text:
                         discount_element = text
                         break
-
             if discount_element:
                 product['discount'] = discount_element
-
             # Extract location if available
             location_element = item.select_one('.oa6ri')
             if location_element:
                 product['location'] = location_element.get('title') or location_element.text.strip()
-
             # Extract image URL
             img_element = item.select_one('img[type="product"]')
             if img_element:
                 product['image_url'] = img_element.get('src')
                 if product['image_url'] and not product['image_url'].startswith('http'):
                     product['image_url'] = 'https:' + product['image_url']
-
             # Only add products that have at least a URL or name
             if ('url' in product or 'name' in product):
                 products.append(product)
-
         except Exception as e:
             print(f"Error extracting product info: {e}")
-
     print(f"Extracted information for {len(products)} products")
     return products
-
 # Function to save products to CSV
 def save_products_to_csv(products, filename="lazada_products_raw.csv"):
     # Create list key 0
     existing_keys = set()
-
     # If file exists, read existing keys
     if os.path.exists(filename):
         with open(filename, newline='', encoding='utf-8') as csvfile:
@@ -119,16 +99,13 @@ def save_products_to_csv(products, filename="lazada_products_raw.csv"):
             for row in reader:
                 if key0 and key0 in row:
                     existing_keys.add(row[key0])
-
     # Open the CSV file in append mode
     with open(filename, mode='a', newline='', encoding='utf-8') as csvfile:
         fieldnames = ['url', 'name', 'discount', 'price', 'location', 'image_url']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
         # If the file is empty, write the header
         if os.path.getsize(filename) == 0:
             writer.writeheader()
-
         new_count = 0
         for product in products:
             key_value = product.get('url')
@@ -136,9 +113,7 @@ def save_products_to_csv(products, filename="lazada_products_raw.csv"):
                 writer.writerow(product)
                 existing_keys.add(key_value)
                 new_count += 1
-
     print(f"Saved {new_count} new products")
-
 # Function to start the browser
 def start_browser():
     options = Options()
@@ -146,7 +121,6 @@ def start_browser():
     driver = webdriver.Chrome(options=options)
     driver.get("https://www.lazada.vn/dien-thoai-may-tinh-bang/")
     return driver
-
 # Manual mode
 def run_manual(driver):
     while True:
@@ -160,7 +134,6 @@ def run_manual(driver):
             return 'auto'
         elif choice != 'm':
             print("manual")
-
 # Auto mode
 def run_auto(driver, start_page=1, num_pages=10, base_url='https://www.lazada.vn/dien-thoai-may-tinh-bang/?page='):
     for page in range(start_page, start_page + num_pages):
@@ -172,12 +145,10 @@ def run_auto(driver, start_page=1, num_pages=10, base_url='https://www.lazada.vn
         products = extract_product_info(html)
         save_products_to_csv(products)
         time.sleep(5)
-
 # Main
 def main():
     driver = start_browser()
     input("Open Lazada and acctive CAPTCHA, then press Enter to continue...")
-
     while True:
         mode = input("Choose mode (a: auto ) (m: manual): ").strip().lower()
         if mode == 'm':
@@ -193,7 +164,5 @@ def main():
                 print("Enter Number!")
         else:
             print("Choose a or m")
-
 if __name__ == "__main__":
     main()
-
