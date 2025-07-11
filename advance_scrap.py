@@ -12,6 +12,12 @@ from selenium.webdriver.support import expected_conditions as EC
 CSV_FILE = "lazada_products_raw.csv"
 OUTPUT_CSV = "lazada_products_extracted.csv"
 
+FIELDNAMES = [
+    'product_title', 'price_final', 'price_original', 'discount_percent',
+    'color', 'main_image', 'thumbnails', 'seller_name', 'seller_url',
+    'warranty_info', 'delivery_address', 'product_description'
+]
+
 def load_product_urls(csv_file=CSV_FILE):
     urls = []
     if not os.path.exists(csv_file):
@@ -29,207 +35,164 @@ def start_browser():
     options = Options()
     options.add_argument('--start-maximized')
     driver = webdriver.Chrome(options=options)
-    driver.execute_script("document.body.style.zoom='40%'")
+    # driver.execute_script("window.scrollBy(0, document.body.scrollHeight / 5);")
+    # driver.execute_script("document.body.style.zoom='10%'")
     return driver
 
-# Hàm cuộn và mở rộng nội dung
-def scroll_and_expand(driver, scroll_pause=1.0):
-    # Cuộn chuột từ từ
-    last_height = driver.execute_script("return document.body.scrollHeight")
+def scroll_and_expand(driver, scroll_pause=1.0, max_scroll=30):
+    # Luôn đảm bảo thu nhỏ 20%
+    driver.execute_script("document.body.style.zoom='20%'")
+    print("🔍 Đang cuộn xuống để tìm nút 'XEM THÊM'...")
 
-    for _ in range(5):
-        driver.execute_script("window.scrollBy(0, document.body.scrollHeight / 5);")
+    for i in range(max_scroll):
+        try:
+            # Kiểm tra sự tồn tại của nút "XEM THÊM"
+            xem_them_btn = driver.find_element(By.CSS_SELECTOR, ".pdp-view-more-btn")
+            if xem_them_btn.is_displayed():
+                print(f"✅ Tìm thấy nút 'XEM THÊM' sau {i+1} lần cuộn.")
+                # Scroll đến nút rồi click
+                ActionChains(driver).move_to_element(xem_them_btn).perform()
+                time.sleep(0.5)
+                xem_them_btn.click()
+                print("🟢 Đã click nút 'XEM THÊM'")
+                
+                # Cuộn lại về đầu sau khi click
+                driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(scroll_pause)
+                return
+        except:
+            pass
+
+        # Cuộn thêm mỗi vòng
+        driver.execute_script("window.scrollBy(0, 500);")
         time.sleep(scroll_pause)
 
-    # Thử click vào nút "XEM THÊM"
-    try:
-        # Chờ nút xuất hiện
-        wait = WebDriverWait(driver, 5)
-        xem_them_btn = wait.until(EC.element_to_be_clickable(
-            (By.CSS_SELECTOR, ".pdp-view-more-btn")))
-        
-        # Scroll đến nút và click
-        ActionChains(driver).move_to_element(xem_them_btn).perform()
-        xem_them_btn.click()
-        print("🟢 Đã click nút 'XEM THÊM'")
-        time.sleep(1.5)
-    except Exception as e:
-        print("⚠️ Không tìm thấy hoặc không thể click nút 'XEM THÊM'.")
+    print("⚠️ Không tìm thấy nút 'XEM THÊM' sau khi cuộn tối đa.")
+    print("↩️ Đang cuộn lại lên đầu...")
 
-    # Cuộn xuống cuối để load thêm nếu có
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    # Luôn đảm bảo quay lại đầu và thu nhỏ
+    driver.execute_script("window.scrollTo(0, 0);")
+    driver.execute_script("document.body.style.zoom='20%'")
     time.sleep(scroll_pause)
 
-def run_manual(driver, urls, start_index=0, max_count=5):
-    total = len(urls)
-    end_index = min(total, start_index + max_count)
 
-    for i in range(start_index, end_index):
-        input(f"[MANUAL] [{i+1}/{total}] Nhấn Enter để mở sản phẩm...")
-        print(f"→ Đang mở: {urls[i]}")
-        driver.get(urls[i])
-        driver.execute_script("document.body.style.zoom='30%'")
-        time.sleep(2)
-        scroll_and_expand(driver)
+def scrape_product_detail(url_html):
+    soup = BeautifulSoup(url_html, 'html.parser') 
+    product = {}
 
-        html = driver.page_source
-        product = scrape_product_detail(html)
-        if product:
-            save_product_to_csv(product)
-            print("📥 Đã lưu sản phẩm.")
-        else:
-            print("❌ Sản phẩm không hợp lệ.")
+    try:
+        product['product_title'] = soup.select_one('#module_product_title_1 .pdp-mod-product-badge-title')
+        product['product_title'] = product['product_title'].get_text(strip=True) if product['product_title'] else None
+
+        price_block = soup.find('div', id='module_product_price_1')
+        if price_block:
+            product['price_final'] = price_block.select_one('.pdp-price_type_normal').get_text(strip=True) if price_block.select_one('.pdp-price_type_normal') else None
+            product['price_original'] = price_block.select_one('.pdp-price_type_deleted').get_text(strip=True) if price_block.select_one('.pdp-price_type_deleted') else None
+            product['discount_percent'] = price_block.select_one('.pdp-product-price__discount').get_text(strip=True) if price_block.select_one('.pdp-product-price__discount') else None
+
+        color_tag = soup.select_one('#module_sku-select .sku-name')
+        product['color'] = color_tag.get_text(strip=True) if color_tag else None
+
+        main_img_tag = soup.select_one('.gallery-preview-panel__image')
+        product['main_image'] = main_img_tag['src'] if main_img_tag and main_img_tag.has_attr('src') else None
+
+        thumbnails = soup.select('.item-gallery__thumbnail-image')
+        product['thumbnails'] = ', '.join([img['src'] for img in thumbnails if img.has_attr('src')])
+
+        seller_tag = soup.select_one('#module_seller_info .seller-name__detail-name')
+        product['seller_name'] = seller_tag.get_text(strip=True) if seller_tag else None
+        product['seller_url'] = 'https:' + seller_tag['href'] if seller_tag and seller_tag.has_attr('href') else None
+
+        warranty_tags = soup.select('#module_seller_warranty .delivery-option-item__title')
+        warranties = [w.get_text(strip=True) for w in warranty_tags]
+        product['warranty_info'] = ' | '.join(warranties) if warranties else None
+
+        delivery_tag = soup.select_one('.location__address')
+        product['delivery_address'] = delivery_tag.get_text(strip=True) if delivery_tag else None
+
+        description_block = soup.select_one('.html-content.detail-content article.lzd-article')
+        description_text = []
+        if description_block:
+            for tag in description_block.find_all(['p', 'span']):
+                if tag.find('img'):
+                    continue
+                text = tag.get_text(separator=' ', strip=True)
+                if text:
+                    description_text.append(text)
+        product['product_description'] = '\n'.join(description_text) if description_text else None
+
+    except Exception as e:
+        print(f"❌ Error extracting product info: {e}")
+        return None
+
+    return product
+
+FIELDNAMES = [
+    'key_0',  # thêm dòng này vào đầu
+    'product_title', 'price_final', 'price_original', 'discount_percent',
+    'color', 'main_image', 'thumbnails', 'seller_name', 'seller_url',
+    'warranty_info', 'delivery_address', 'product_description'
+]
+
+def save_product_to_csv(product, filename=OUTPUT_CSV):
+    file_exists = os.path.isfile(filename)
+    current_index = 1
+
+    # Nếu file đã tồn tại, tính số dòng hiện có (bỏ header)
+    if file_exists:
+        with open(filename, newline='', encoding='utf-8') as csvfile:
+            reader = csv.reader(csvfile)
+            lines = list(reader)
+            current_index = len(lines)  # index = số dòng hiện tại (bao gồm header)
+
+    # Thêm key_0 vào sản phẩm
+    product_with_key = {'key_0': current_index}
+    for key in FIELDNAMES:
+        if key != 'key_0':
+            product_with_key[key] = product.get(key, '')
+
+    # Ghi file
+    with open(filename, mode='a', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=FIELDNAMES)
+        if not file_exists or os.path.getsize(filename) == 0:
+            writer.writeheader()
+        writer.writerow(product_with_key)
+
 
 
 def run_auto(driver, urls, start_index=0, delay=5, max_count=None):
+    success_count = 0
+    failed_count = 0
     total = len(urls)
     end_index = min(total, start_index + (max_count if max_count else total))
 
     for i in range(start_index, end_index):
-        print(f"[AUTO] [{i+1}/{total}] Đang mở: {urls[i]}")
-        driver.get(urls[i])
-        driver.execute_script("document.body.style.zoom='30%'")
-        time.sleep(delay)
-        scroll_and_expand(driver)
+        print(f"\n[AUTO] [{i+1}/{total}] Đang mở: {urls[i]}")
+        try:
+            driver.get(urls[i])
+            time.sleep(delay)
 
-        html = driver.page_source
-        product = scrape_product_detail(html)
-        if product:
-            save_product_to_csv(product)
-            print("📥 Đã lưu sản phẩm.")
-        else:
-            print("❌ Sản phẩm không hợp lệ.")
+            # Thu nhỏ trang & xử lý tự động cuộn + click 'XEM THÊM'
+            scroll_and_expand(driver)
 
-# Extract product information from the page
-def scrape_product_detail(url_html):
-    soup = BeautifulSoup(url_html, 'html.parser') 
-    products = []
-    
-    try:
-        product_info = {}
+            html = driver.page_source
+            product = scrape_product_detail(html)
 
-        # Tìm block đầu tiên chứa thông tin cơ bản
-        block_1 = soup.find('div', id='block-IH9e2k0K6L')
-        product_title = None
+            if product:
+                # Gắn thêm URL vào product nếu cần dùng làm key
+                product['url'] = urls[i]
+                save_product_to_csv(product)
+                success_count += 1
+                print("✅ Đã lưu sản phẩm.")
+            else:
+                failed_count += 1
+                print("❌ Sản phẩm không hợp lệ hoặc không có dữ liệu.")
+        except Exception as e:
+            print(f"⚠️ Lỗi khi xử lý URL: {e}")
+            failed_count += 1
+            continue
 
-        # Lấy tiêu đề sản phẩm từ block đầu tiên
-        if block_1:
-            title_tag = block_1.select_one('#module_product_title_1 .pdp-mod-product-badge-title')
-            if title_tag:
-                product_title = title_tag.get_text(strip=True)
-
-        product_info.append({'product_title': product_title})
-
-        # lấy danh sách option
-        variant_option_count = None  # Mặc định là None nếu không tìm thấy
-
-        if block_1:
-            sku_block = block_1.find('div', id='module_sku-select')
-            if sku_block:
-                # Tìm tất cả biến thể sản phẩm hiển thị (có class sku-variable-img-wrap hoặc sku-variable-img-wrap-selected)
-                variant_elements = sku_block.select('.sku-variable-img-wrap, .sku-variable-img-wrap-selected')
-                variant_option_count = len(variant_elements) if variant_elements else 0
-
-        product_info.append({'variant_option_count': variant_option_count})
-
-        # Lấy giá sản phẩm
-        price_final = None
-        price_original = None
-        discount_percent = None
-
-        if block_1:
-            price_block = block_1.find('div', id='module_product_price_1')
-            if price_block:
-                # Giá sau giảm (giá hiện tại)
-                price_tag = price_block.select_one('.pdp-price.pdp-price_type_normal')
-                if price_tag:
-                    price_final = price_tag.get_text(strip=True)
-
-                # Giá gốc (đã gạch)
-                original_price_tag = price_block.select_one('.pdp-price.pdp-price_type_deleted')
-                if original_price_tag:
-                    price_original = original_price_tag.get_text(strip=True)
-
-                # Phần trăm giảm giá (nếu có)
-                discount_tag = price_block.select_one('.pdp-product-price__discount')
-                if discount_tag:
-                    discount_percent = discount_tag.get_text(strip=True)
-
-        product_info.append({
-            'price_final': price_final,
-            'price_original': price_original,
-            'discount_percent': discount_percent
-        })
-
-        # Lấy thông tin bảo hành
-        warranty_info = None
-
-        if block_1:
-            warranty_block = block_1.find('div', id='module_seller_warranty')
-            if warranty_block:
-                options = warranty_block.select('.warranty__option-item .delivery-option-item__title')
-                warranty_info = [opt.get_text(strip=True) for opt in options if opt.get_text(strip=True)]
-
-        warranty_info = ' | '.join([w for w in warranty_info if w]) if warranty_info else None
-
-        product_info.append({
-            'warranty_info': warranty_info
-        })
-
-        # lấy thông tin shop bán
-        seller_name = None
-        seller_url = None
-
-        if block_1:
-            seller_block = block_1.find('div', id='module_seller_info')
-            if seller_block:
-                seller_name_tag = seller_block.find('a', class_='seller-name__detail-name')
-                if seller_name_tag:
-                    seller_name = seller_name_tag.get_text(strip=True)
-                    seller_url = seller_name_tag.get('href')
-                    if seller_url and seller_url.startswith('//'):
-                        seller_url = 'https:' + seller_url
-
-        product_info.append({
-            'seller_name': seller_name,
-            'seller_url': seller_url
-        })
-
-        # # Tìm phần chứa mô tả chi tiết sản phẩm
-        # detail_content = soup.select_one("div.html-content.detail-content article.lzd-article")
-
-        # # Nếu không tìm thấy thì bỏ qua
-        # if detail_content:
-        #     # Tìm tất cả thẻ có thể chứa mô tả
-        #     description_blocks = detail_content.find_all(['ul', 'p', 'span', 'div'])
-
-        #     for block in description_blocks:
-        #         text = block.get_text(separator=" ", strip=True)
-        #         if text:
-        #             product_info.append({
-        #                 'description_item': text
-        #             })
-
-    except Exception as e:
-            print(f"Error extracting product info: {e}")
-
-    return products
-
-
-# Hàm lưu sản phẩm vào file CSV
-def save_product_to_csv(product, filename=OUTPUT_CSV):
-    file_exists = os.path.isfile(filename)
-
-    # Mở file với mode append
-    with open(filename, mode='a', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=product.keys())
-
-        # Ghi header nếu file chưa tồn tại
-        if not file_exists:
-            writer.writeheader()
-
-        # Ghi dữ liệu sản phẩm
-        writer.writerow(product)
+    return 'done', end_index, success_count, failed_count
 
 
 def main():
@@ -246,9 +209,7 @@ def main():
 
     while index < len(urls):
         mode = input("\n🔘 Chọn chế độ (m: thủ công, a: tự động): ").strip().lower()
-        if mode == 'm':
-            result, index, ok, fail = run_manual(driver, urls, start_index=index)
-        elif mode == 'a':
+        if mode == 'a':
             try:
                 delay = int(input("⏱ Nhập thời gian chờ giữa các sản phẩm (giây): "))
                 result, index, ok, fail = run_auto(driver, urls, start_index=index, delay=delay)
@@ -256,7 +217,7 @@ def main():
                 print("❌ Vui lòng nhập số nguyên!")
                 continue
         else:
-            print("❌ Chỉ được nhập 'm' hoặc 'a'.")
+            print("❌ Hiện tại chỉ hỗ trợ chế độ tự động (a).")
             continue
 
         success_count += ok
